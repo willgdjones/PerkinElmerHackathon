@@ -10,6 +10,7 @@ from helpers import *
 def lrn(x):
     return tf.nn.lrn(x, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75)
 
+
 class Image():
     def __init__(self,ID, generate_training=False):
         self.ID = ID
@@ -193,7 +194,7 @@ class Segmenter():
 
 
         segmented_array  = [x.argmax() for x in total_output]
-        segmented_image = np.array(segmented_array).reshape(1070,1070)
+        segmented_image = np.array(segmented_array).reshape(1070,1070).astype(float)
         return segmented_image
     
     def display(self):
@@ -214,8 +215,38 @@ class Segmenter():
 class Classifier():
     def __init__(self, params):
         self.params = params
+        self.test_cost = [0]
+        self.train_cost = [0]
+        self.test_accuracy = [0]
+        self.train_accuracy = [0]
         
-    def train(self):
+    def display_statistics(self):
+        epoch_steps = [i*1 for i in range(len(self.train_cost))]
+
+        f,a = plt.subplots(1,2,figsize=(15,5))
+        a[0].set_title("Accuracy per Epoch",size=15)
+        a[0].set_ylabel('Accuracy')
+        a[0].set_xlabel('Epoches')
+        a[0].plot(epoch_steps,self.train_accuracy, label='train')
+        a[0].plot(epoch_steps,self.test_accuracy,label='test')
+        a[0].set_xticks(epoch_steps)
+        a[0].set_xticks(a[0].get_xticks()[::5])
+        a[0].set_yticks(np.arange(0,1.1,0.1))
+        a[0].legend(loc='lower right')
+
+        a[1].set_title("Cost per Epoch",size=15)
+        a[1].set_ylabel('Cost')
+        a[1].set_xlabel('Epoches')
+        a[1].plot(epoch_steps,self.train_cost, label='train')
+        a[1].plot(epoch_steps,self.test_cost, label='test')
+        a[1].set_xticks(epoch_steps)
+        a[1].set_xticks(a[1].get_xticks()[::5])
+        a[1].set_yticks(np.arange(0,max(self.train_cost)+1000,1000))
+        a[1].legend(loc='upper right')
+        return f,a
+
+        
+    def train(self,verbose=False):
         
         data = pickle.load(open('patches/oldpatches/patches_{}.py'.format(self.params['patches_number']),'rb'))
 
@@ -278,24 +309,47 @@ class Classifier():
             sess.run(init)
             for ep in range(self.params['epochs']):
                 t = time.time()
-
                 for i in range(n_batches+1):
                     b_X_train = np.array(X_train[i*self.params['batch_size']:(i+1)*self.params['batch_size']])
                     b_X_train = b_X_train.reshape(-1,11,11,1)
                     b_y_train = y_train[i*self.params['batch_size']:(i+1)*self.params['batch_size']]
-                    _, c, acc = sess.run([optimiser, cost, accuracy], feed_dict={X:b_X_train, Y: b_y_train, keep_prob:0.5})
+                    _, trbc, trbcount = sess.run([optimiser, cost, count], feed_dict={X:b_X_train, Y: b_y_train, keep_prob:0.5})
 
                 if ep % self.params['display_step'] == 0:
-                    random_idx = np.random.choice(range(len(X_test)), 500)
-                    random_X_test = np.array(X_test)[random_idx]
-                    random_X_test = random_X_test.reshape(-1,11,11,1)
-                    random_y_test = np.array(y_test)[random_idx]
+                    
+                    tc = 0
+                    tcount = 0
+                    for i in range((len(X_test)/self.params['batch_size'])+1):
+                        b_X_test = np.array(X_test[i*self.params['batch_size']:(i+1)*self.params['batch_size']])
+                        b_X_test = b_X_test.reshape(-1,11,11,1)
+                        b_y_test = y_test[i*self.params['batch_size']:(i+1)*self.params['batch_size']]
+                        tbc, tbcount = sess.run([cost, count], feed_dict={X:b_X_test, Y: b_y_test, keep_prob:1})
+                        tc += tbc
+                        tcount += tbcount
+                    tacc = float(tcount) / len(X_test)
 
-                    t_, tc, tacc = sess.run([optimiser, cost, accuracy], feed_dict={X:random_X_test, Y: random_y_test, keep_prob:1})
-                    print "Ep: {}, train c: {:.1f}, train acc: {:.3f}, test c: {:.1f},  test acc: {:.3f}, secs p/e {}, {:.1f} imgs p/s".format(ep,c,acc, tc, tacc,(time.time() - t),(number_of_examples) / (time.time() - t))
+                    self.test_cost.append(tc)
+                    self.test_accuracy.append(tacc)
+                    
+                    trc = 0
+                    trcount = 0
+                    for i in range(n_batches+1):
+                        b_X_train = np.array(X_train[i*self.params['batch_size']:(i+1)*self.params['batch_size']])
+                        b_X_train = b_X_train.reshape(-1,11,11,1)
+                        b_y_train = y_train[i*self.params['batch_size']:(i+1)*self.params['batch_size']]
+                        trbc, trbcount = sess.run([cost, count], feed_dict={X:b_X_train, Y: b_y_train, keep_prob:1})
+                        trc += trbc
+                        trcount += trbcount
+                    tracc = float(trcount) / len(X_train)
+                    
+                    self.train_cost.append(trc)
+                    self.train_accuracy.append(tracc)
+
+                    
+                    if verbose:
+                        print "Ep: {}, train c: {:.1f}, train acc: {:.3f}, test c: {:.1f},  test acc: {:.3f}, secs p/e {}, {:.1f} imgs p/s".format(ep,trc,tracc, tc, tacc,(time.time() - t),(number_of_examples) / (time.time() - t))
+                    
                     saver.save(sess, self.params['models_dir'] + "/patches{}-ep{}-lr{}".format(self.params['patches_number'],ep,self.params['learning_rate']))
-
-
-        print "Total training time: {} at {} per epoch".format(time.time() - s, (time.time() - s) / self.params['epochs'])
+                self.final_message = "Total training time: {} at {} per epoch".format(time.time() - s, (time.time() - s) / self.params['epochs'])        
         
     

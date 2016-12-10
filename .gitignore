@@ -4,3 +4,5 @@ png
 models
 patches
 Progress*.ipynb
+classifierobj.py
+segments.py
